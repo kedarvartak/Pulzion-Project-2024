@@ -7,6 +7,7 @@ from langchain_community.utilities import SQLDatabase
 from langchain_core.output_parsers import StrOutputParser
 from langchain_groq import ChatGroq
 import pymysql
+import psycopg2  # Added for PostgreSQL
 import os
 from dotenv import load_dotenv
 import sounddevice as sd
@@ -35,9 +36,16 @@ DB_NAME = os.getenv("DB_NAME", "friends")
 MONGO_DB_URI = os.getenv("MONGO_DB_URI")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
 
+# PostgreSQL connection details (hardcoded or from environment variables)
+PG_USER = os.getenv("PG_USER", "postgres")          # Replace with your PostgreSQL username
+PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres_password")  # Replace with your PostgreSQL password
+PG_HOST = os.getenv("PG_HOST", "localhost")
+PG_PORT = os.getenv("PG_PORT", "5432")
+PG_DATABASE = os.getenv("PG_DATABASE", "postgres_db")       # Replace with your PostgreSQL database name
+
 # Set page configuration as the first Streamlit command
 st.set_page_config(
-    page_title="💬 Chat with MySQL/CSV/MongoDB",
+    page_title="💬 Chat with MySQL/CSV/MongoDB/PostgreSQL",
     page_icon=":speech_balloon:",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -56,6 +64,18 @@ def init_databases(user: str, password: str, host: str, port: str, database: str
         return query_db, schema_db
     except Exception as e:
         logger.error(f"MySQL Connection Error: {e}")
+        raise e
+
+# Initialize PostgreSQL Database connection
+def init_postgres_db(user: str, password: str, host: str, port: str, database: str) -> SQLDatabase:
+    try:
+        db_uri = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}"
+        logger.debug(f"Attempting to connect to PostgreSQL with URI: {db_uri}")
+        postgres_db = SQLDatabase.from_uri(db_uri)
+        logger.info("PostgreSQL connection established successfully.")
+        return postgres_db
+    except Exception as e:
+        logger.error(f"PostgreSQL Connection Error: {e}")
         raise e
 
 # Initialize MongoDB client
@@ -90,6 +110,8 @@ def get_mongo_collection(db, collection_name):
 def load_csv(file) -> pd.DataFrame:
     try:
         df = pd.read_csv(file)
+        # Remove unnecessary unnamed columns
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
         st.session_state.csv_data = df
         st.success(f"✅ Successfully uploaded: {file.name}")
         logger.info(f"CSV file '{file.name}' loaded successfully.")
@@ -116,7 +138,26 @@ def sanitize_query(query: str) -> str:
 
 # Function to parse and generate user-friendly error messages
 def parse_error_message(exception: Exception) -> str:
-    if isinstance(exception, pymysql.err.OperationalError):
+    # Handle PostgreSQL errors
+    if isinstance(exception, psycopg2.Error):
+        error_code = exception.pgcode
+        error_msg = exception.pgerror
+        if error_code == '42P01':  # Undefined table
+            match = re.search(r'(?i)table "([^"]+)" does not exist', error_msg)
+            if match:
+                table = match.group(1)
+                return f"❌ *Error:* The table '{table}' does not exist in the database. Please check your query and try again."
+            return "❌ *Error:* There was an issue with your query. Please verify the table names and try again."
+        elif error_code == '42703':  # Undefined column
+            match = re.search(r'(?i)column "([^"]+)" does not exist', error_msg)
+            if match:
+                column = match.group(1)
+                return f"❌ *Error:* The column '{column}' does not exist in the specified table. Please check your query and try again."
+            return "❌ *Error:* There was an issue with your query. Please verify the column names and try again."
+        else:
+            return f"❌ *Error:* PostgreSQL Error {error_code}: {error_msg}"
+    # Handle MySQL errors
+    elif isinstance(exception, pymysql.err.OperationalError):
         error_code = exception.args[0]
         error_msg = exception.args[1]
         if error_code == 1054:
@@ -136,7 +177,8 @@ def parse_error_message(exception: Exception) -> str:
     elif isinstance(exception, pymysql.err.ProgrammingError):
         return "❌ *Error:* There was a syntax error in your query. Please review it and try again."
     else:
-        return "❌ *Error:* An unexpected error occurred while processing your request. Please try again later."
+        # For unexpected errors, return the actual exception message for debugging
+        return f"❌ *Error:* An unexpected error occurred: {str(exception)}"
 
 # Get SQL chain for the model interaction (Queries)
 def get_sql_chain(query_db: SQLDatabase, schema_db: SQLDatabase):
@@ -168,6 +210,61 @@ def get_sql_chain(query_db: SQLDatabase, schema_db: SQLDatabase):
             return schema_info
         except Exception as e:
             logger.error(f"Schema Retrieval Error: {e}")
+            return ""
+
+    return (
+        RunnablePassthrough.assign(schema=get_schema)
+        | prompt
+        | llm.invoke
+        | StrOutputParser()
+    )
+
+# Get PostgreSQL SQL chain
+def get_postgres_sql_chain(postgres_db: SQLDatabase):
+    template = """
+    You are a data analyst at a company. You are interacting with a user who is asking you questions about the company's PostgreSQL database.
+    Based on the table schema below, write a SQL query that would answer the user's question.
+
+    <SCHEMA>{schema}</SCHEMA>
+
+    Write only the SQL query and nothing else. Do not wrap the SQL query in any other text, not even backticks.
+    Do not escape any characters in the SQL query.
+
+    Question: {question}
+    SQL Query:
+    """
+    prompt = ChatPromptTemplate.from_template(template)
+    llm = chat_groq
+
+    def get_schema(_):
+        try:
+            tables = postgres_db.run("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';")
+            schema_info = ""
+            for table_tuple in tables:
+                table = table_tuple[0]  # Extract table name
+                try:
+                    # Retrieve table creation statement
+                    # Note: PostgreSQL does not have a direct equivalent to MySQL's SHOW CREATE TABLE
+                    # Using information_schema.columns to construct a simple CREATE TABLE statement
+                    columns = postgres_db.run(f"""
+                        SELECT column_name, data_type 
+                        FROM information_schema.columns 
+                        WHERE table_name = '{table}';
+                    """)
+                    create_stmt = f"CREATE TABLE {table} (\n"
+                    column_defs = []
+                    for col in columns:
+                        column_defs.append(f"  {col[0]} {col[1]}")
+                    create_stmt += ",\n".join(column_defs)
+                    create_stmt += "\n);"
+                    schema_info += create_stmt + "\n\n"
+                except Exception as table_error:
+                    logger.error(f"Error retrieving schema for table `{table}`: {table_error}")
+                    schema_info += f"-- Error retrieving schema for table `{table}`: {table_error}\n\n"
+            logger.info("PostgreSQL schema retrieved successfully.")
+            return schema_info
+        except Exception as e:
+            logger.error(f"PostgreSQL Schema Retrieval Error: {e}")
             return ""
 
     return (
@@ -217,12 +314,56 @@ def get_response(user_query: str, query_db: SQLDatabase, schema_db: SQLDatabase)
         user_friendly_message = parse_error_message(e)
         return user_friendly_message
 
+# Generate PostgreSQL response based on the user query and database state
+def get_response_postgres(user_query: str, postgres_db: SQLDatabase):
+    sql_chain = get_postgres_sql_chain(postgres_db)
+
+    try:
+        template = """
+        You are a data analyst at a company. You are interacting with a user who is asking you questions about the company's PostgreSQL database.
+        Based on the table schema below, the question, the SQL query, and the SQL response, write a natural language response.
+
+        <SCHEMA>{schema}</SCHEMA>
+
+        SQL Query: <SQL>{query}</SQL>
+        User Question: {question}
+        SQL Response: {response}
+
+        Natural Language Response:
+        """
+        prompt = ChatPromptTemplate.from_template(template)
+        llm = chat_groq
+
+        chain = (
+            RunnablePassthrough.assign(query=sql_chain).assign(
+                schema=lambda _: postgres_db.run("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';"),
+                response=lambda vars: postgres_db.run(sanitize_query(vars["query"])),
+            )
+            | prompt
+            | llm.invoke
+            | StrOutputParser()
+        )
+
+        response = chain.invoke({
+            "question": user_query,
+        })
+        logger.info("PostgreSQL response generated successfully.")
+        return response
+    except Exception as e:
+        logger.error(f"PostgreSQL Response Error: {e}")
+        user_friendly_message = parse_error_message(e)
+        return user_friendly_message
+
 # Generate responses based on CSV data
 def get_response_csv(user_query: str, df: pd.DataFrame):
-    st.write("### Debugging get_response_csv")
-    st.write(f"User Query: {user_query}")
-    st.write(f"DataFrame Columns: {df.columns.tolist()}")
-    st.write(f"DataFrame Head:\n{df.head()}")
+    # Access the debug_mode from session state
+    debug_mode = st.session_state.get("debug_mode", False)
+
+    if debug_mode:
+        st.write("### Debugging get_response_csv")
+        st.write(f"User Query: {user_query}")
+        st.write(f"DataFrame Columns: {df.columns.tolist()}")
+        st.write(f"DataFrame Head:\n{df.head()}")
 
     try:
         # Define a more flexible pattern to capture different query formats
@@ -283,7 +424,7 @@ def get_response_mongo(user_query: str, collection):
     try:
         # Define the prompt to translate natural language to MongoDB query
         prompt = f"""
-        Translate the following natural language query into a MongoDB query for the 'movies' collection in the 'sample_mflix' database.
+        Translate the following natural language query into a MongoDB query for the '{collection.name}' collection in the '{collection.database.name}' database.
         The response should be a valid MongoDB query in JSON format. Only provide the MongoDB query and nothing else.
 
         Natural Language Query: "{user_query}"
@@ -337,9 +478,11 @@ def reset_chat_history():
     st.session_state.messages = []
     logger.info("Chat history has been reset due to data source change.")
 
-# Initialize chat history in session state if not present
+# Initialize chat history and debug mode in session state if not present
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
 
 # Process user query (either text or transcription)
 def process_query(user_query: str):
@@ -357,6 +500,8 @@ def process_query(user_query: str):
     if ("mongo_db" in st.session_state and st.session_state.mongo_db is not None and
         "mongo_collection" in st.session_state and st.session_state.mongo_collection is not None):
         response = get_response_mongo(user_query, st.session_state.mongo_collection)
+    elif ("postgres_db" in st.session_state and st.session_state.postgres_db is not None):
+        response = get_response_postgres(user_query, st.session_state.postgres_db)
     elif ("query_db" in st.session_state and "schema_db" in st.session_state and
           st.session_state.query_db is not None and st.session_state.schema_db is not None):
         response = get_response(user_query, st.session_state.query_db, st.session_state.schema_db)
@@ -425,19 +570,22 @@ def handle_voice_input():
         st.error(transcription)
 
 # Initialize chat interface
-st.title("💬 Chat with MySQL/CSV/MongoDB")
+st.title("💬 Chat with MySQL/CSV/MongoDB/PostgreSQL")
 
 # Sidebar: Data source selection and connection form
 with st.sidebar:
     st.subheader("⚙️ Settings")
-    st.write("This is a simple chat application using MySQL, CSV, or MongoDB. Connect to a database or upload a CSV file.")
+    st.write("This is a simple chat application using MySQL, CSV, MongoDB, or PostgreSQL. Connect to a database or upload a CSV file.")
+
+    # Add a debug toggle
+    st.checkbox("Enable Debug Mode", value=False, key="debug_mode")
 
     st.markdown("---")
 
     # Data Source Selection
     data_source = st.radio(
         "Select Data Source",
-        ("None", "MySQL", "MongoDB", "CSV"),
+        ("None", "MySQL", "PostgreSQL", "MongoDB", "CSV"),
         index=0,
         key="data_source_radio"
     )
@@ -449,6 +597,7 @@ with st.sidebar:
             # Disconnect all data sources
             st.session_state.query_db = None
             st.session_state.schema_db = None
+            st.session_state.postgres_db = None
             st.session_state.mongo_db = None
             st.session_state.mongo_collection = None
             st.session_state.csv_data = None
@@ -468,6 +617,7 @@ with st.sidebar:
                         st.session_state.query_db = query_db
                         st.session_state.schema_db = schema_db
                         # Deactivate other data sources
+                        st.session_state.postgres_db = None
                         st.session_state.mongo_db = None
                         st.session_state.mongo_collection = None
                         st.session_state.csv_data = None
@@ -475,6 +625,32 @@ with st.sidebar:
                         st.success("✅ Connected to MySQL!")
                     except Exception as e:
                         st.error(f"❌ Failed to connect to MySQL: {parse_error_message(e)}")
+
+        elif selected == "PostgreSQL":
+            st.subheader("Connect to PostgreSQL")
+            
+            # PostgreSQL connection settings
+            pg_host = st.text_input("Host", value="localhost", key="PG_Host")
+            pg_port = st.text_input("Port", value=5432, key="PG_Port")
+            pg_user = st.text_input("User", value="postgres", key="PG_User")
+            pg_password = st.text_input("Password", type="password", value="kedar", key="PG_Password")
+            pg_database = st.text_input("Database", value="friends-pg", key="PG_Database")
+
+            if st.button("Connect to PostgreSQL", key="connect_postgres"):
+                with st.spinner("🔗 Connecting to PostgreSQL..."):
+                    try:
+                        postgres_db = init_postgres_db(pg_user, pg_password, pg_host, pg_port, pg_database)
+                        st.session_state.postgres_db = postgres_db
+                        # Deactivate other data sources
+                        st.session_state.query_db = None
+                        st.session_state.schema_db = None
+                        st.session_state.mongo_db = None
+                        st.session_state.mongo_collection = None
+                        st.session_state.csv_data = None
+                        reset_chat_history()  # Reset chat history
+                        st.success("✅ Connected to PostgreSQL!")
+                    except Exception as e:
+                        st.error(f"❌ Failed to connect to PostgreSQL: {parse_error_message(e)}")
 
         elif selected == "MongoDB":
             # MongoDB connection settings
@@ -489,6 +665,8 @@ with st.sidebar:
                         # Deactivate other data sources
                         st.session_state.query_db = None
                         st.session_state.schema_db = None
+                        st.session_state.postgres_db = None
+                        st.session_state.mongo_collection = None
                         st.session_state.csv_data = None
                         reset_chat_history()  # Reset chat history
                         st.success("✅ Connected to MongoDB!")
@@ -513,6 +691,7 @@ with st.sidebar:
                 # Deactivate other data sources
                 st.session_state.query_db = None
                 st.session_state.schema_db = None
+                st.session_state.postgres_db = None
                 st.session_state.mongo_db = None
                 st.session_state.mongo_collection = None
                 reset_chat_history()  # Reset chat history after uploading a new CSV
@@ -529,7 +708,9 @@ with st.sidebar:
 
     # Display active data source
     st.write("### Active Data Source")
-    if st.session_state.get("query_db") is not None:
+    if st.session_state.get("postgres_db") is not None:
+        st.success("✅ PostgreSQL is connected.")
+    elif st.session_state.get("query_db") is not None:
         st.success("✅ MySQL is connected.")
     elif st.session_state.get("mongo_db") is not None:
         st.success("✅ MongoDB is connected.")
@@ -537,6 +718,8 @@ with st.sidebar:
         st.success("✅ CSV file is uploaded.")
     else:
         st.info("🔌 No data source connected.")
+
+st.markdown("---")
 
 # Create a container for the input components
 input_container = st.container()
