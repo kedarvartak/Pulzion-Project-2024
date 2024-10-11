@@ -1,0 +1,138 @@
+/* Import IBM Plex Sans font */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+/* Body and Background Styling */
+body {
+    background-color: #0e0e0e; /* Very dark grey background */
+    font-family: 'IBM Plex Sans', sans-serif; /* Streamlit's font */
+    color: #dcdcdc; /* Slightly lighter grey text color for contrast */
+    margin: 0;
+    padding: 0;
+}
+
+/* Header Styling */
+h1 {
+    color: #ffffff; /* White for header text */
+    font-size: 2em;
+    margin-bottom: 20px;
+    font-weight: bold;
+    text-align: center;
+    padding-top: 20px;
+}
+
+/* General Text Styling */
+label, .Select-placeholder, .Select-value-label {
+    color: #dcdcdc;
+    font-weight: 500;
+}
+
+/* Sidebar Container */
+.sidebar-content {
+    background-color: #161616; /* Dark background for sidebar */
+    padding: 20px;
+    border-right: 1px solid #444;
+}
+
+/* Dropdown Styling */
+.Select-control {
+    background-color: #1e1e1e; /* Darker grey for dropdown */
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #dcdcdc;
+    box-shadow: none;
+}
+
+.Select-control:hover {
+    border-color: #4CAF50; /* Green border on hover */
+}
+
+.Select-menu-outer {
+    background-color: #2b2b2b;
+    border: 1px solid #444;
+}
+
+.Select-option {
+    color: #dcdcdc;
+    padding: 10px;
+}
+
+.Select-option:hover {
+    background-color: #333;
+}
+
+/* Checkbox and Radio Buttons Styling */
+input[type="checkbox"], input[type="radio"] {
+    accent-color: #4CAF50; /* Green accent color */
+}
+
+/* Button Styling */
+.stButton button {
+    background-color: #333;
+    color: #cfcfcf;
+    border: 1px solid #4CAF50; /* Green border */
+    border-radius: 4px;
+    padding: 10px 20px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.stButton button:hover {
+    background-color: #4CAF50; /* Green on hover */
+    color: #ffffff;
+    box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+}
+
+.stButton button:active {
+    background-color: #388e3c; /* Slightly darker green */
+}
+
+/* Input Box Styling */
+.stTextInput, input[type="text"] {
+    background-color: #1e1e1e;
+    color: #dcdcdc;
+    border: 1px solid #444;
+    padding: 10px;
+    border-radius: 4px;
+    width: 100%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: border-color 0.3s ease;
+}
+
+.stTextInput:focus, input[type="text"]:focus {
+    border-color: #4CAF50;
+    outline: none;
+}
+
+/* Divider Styling */
+.stDivider {
+    border-color: #444;
+    margin: 10px 0;
+}
+
+/* Visualization Container */
+#visualization {
+    margin-top: 20px;
+    padding: 20px;
+    background-color: #1a1a1a; /* Slightly lighter dark background */
+    border-radius: 8px;
+    border: 1px solid #444;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+}
+
+/* Footer or Additional Elements */
+.footer {
+    color: #7a7a7a;
+    text-align: center;
+    padding: 15px;
+    font-size: 12px;
+}
+
+/* Customize Streamlit's Sidebar Headers */
+.sidebar .sidebar-content h2 {
+    color: #ffffff;
+    border-bottom: 1px solid #444;
+    padding-bottom: 5px;
+    font-weight: 600;
+}

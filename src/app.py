@@ -18,6 +18,7 @@ from pymongo import MongoClient
 from bson import ObjectId
 import json
 import logging
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -38,10 +39,10 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
 
 # PostgreSQL connection details (hardcoded or from environment variables)
 PG_USER = os.getenv("PG_USER", "postgres")          # Replace with your PostgreSQL username
-PG_PASSWORD = os.getenv("PG_PASSWORD", "postgres_password")  # Replace with your PostgreSQL password
+PG_PASSWORD = os.getenv("PG_PASSWORD", "kedar")  # Replace with your PostgreSQL password
 PG_HOST = os.getenv("PG_HOST", "localhost")
 PG_PORT = os.getenv("PG_PORT", "5432")
-PG_DATABASE = os.getenv("PG_DATABASE", "postgres_db")       # Replace with your PostgreSQL database name
+PG_DATABASE = os.getenv("PG_DATABASE", "friends-pg")       # Replace with your PostgreSQL database name
 
 # Set page configuration as the first Streamlit command
 st.set_page_config(
@@ -484,6 +485,12 @@ if "messages" not in st.session_state:
 if "debug_mode" not in st.session_state:
     st.session_state.debug_mode = False
 
+# Function to save the AI-generated query to a file
+def save_query_to_file(generated_query):
+    data = {'query': generated_query}
+    with open('latest_query.json', 'w') as file:
+        json.dump(data, file)
+
 # Process user query (either text or transcription)
 def process_query(user_query: str):
     if not isinstance(user_query, str) or user_query.strip() == "":
@@ -511,10 +518,29 @@ def process_query(user_query: str):
         response = get_response_csv(user_query, df)
     else:
         response = "❌ *Error:* No database, CSV, or MongoDB collection selected. Please connect to a data source."
+        st.session_state.messages.append({"role": "AI", "content": response})
+        return
 
-    # Append AI response to session state
-    st.session_state.messages.append({"role": "AI", "content": response})
-    logger.info(f"AI response appended to session state: {response}")
+    # Separate query and natural language answer if available
+    # Assuming response structure: "SQL Query: <query_here>\n\nNatural Language Response: <response_here>"
+    if "SQL Query:" in response:
+        query_part, answer_part = response.split("\n\n", 1)
+        query = query_part.replace("SQL Query:", "").strip()
+        answer = answer_part.replace("Natural Language Response:", "").strip()
+    else:
+        query = response
+        answer = response  # Fall back if the format is different
+
+    # Show both query and answer to the user
+    st.session_state.messages.append({"role": "AI", "content": f"**Generated Query:**\n```{query}```"})
+    st.session_state.messages.append({"role": "AI", "content": answer})
+    
+    # Save only the query to file for the dashboard
+    save_query_to_file(query)
+
+    logger.info(f"AI response appended to session state. Query: {query}, Answer: {answer}")
+
+
 
 # Handle user input from text input
 def handle_user_input():
@@ -581,6 +607,19 @@ with st.sidebar:
     st.checkbox("Enable Debug Mode", value=False, key="debug_mode")
 
     st.markdown("---")
+
+    if st.button('Add Visualization', key="redirect_dash"):
+    # Use HTML link to open Dash app in a new tab
+        st.markdown(
+            '<a href="http://127.0.0.1:8050/" target="_blank" style="text-decoration: none;">'
+            '<button style="background-color: #4CAF50; color: white; padding: 10px 20px; '
+            'border: none; cursor: pointer;">'
+            'Open Dash Visualization'
+            '</button>'
+            '</a>', 
+            unsafe_allow_html=True
+    )
+
 
     # Data Source Selection
     data_source = st.radio(
