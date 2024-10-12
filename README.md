@@ -1,6 +1,6 @@
 # Pulzion-2024-Web N App entry for team algoRIZZmers - Kedar Vartak, Tejas Kulkarni, Yash Kulkarni, Varad Kulkarni.
 
-# 💬 Chat with MySQL/CSV/MongoDB
+# 💬 Chat with MySQL/CSV/MongoDB/PostgreSQL
 
 This project is a data-driven **chat interface** built with **Streamlit**, allowing users to query MySQL databases, CSV files, or MongoDB collections through natural language inputs. The application seamlessly integrates voice and text inputs to allow users to interact with various data sources in real time. The platform dynamically handles data switching between different databases, making it easy for users to access data from multiple sources in a user-friendly interface.
 
